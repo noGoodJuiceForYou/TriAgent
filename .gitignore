@@ -1,0 +1,21 @@
+.idea/
+.DS_Store
+.env
+.env.*
+
+# Local-only project configuration carrying credentials; only the
+# *.template.json files next to them are safe to commit.
+config/project.json
+config/user.project.json
+.venv/
+apps/backend/var/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+docs/.vitepress/cache/
+docs/.vitepress/dist/
