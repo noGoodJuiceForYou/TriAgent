@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# pyright: reportPrivateUsage=false
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -13,6 +14,11 @@ from alembic import command
 from alembic.config import Config
 
 from triagent_ops.aiops import AiopsDiagnosticService, DiagnosisCasePersistor
+from triagent_ops.aiops.diagnostics import (
+    MAX_REPLAN_STEPS,
+    _deterministic_replan_decision,
+    _validated_replan_decision,
+)
 from triagent_ops.api.app import AiopsDiagnosticRunner, create_app
 from triagent_ops.llm import LlmProvider, RerankResult
 from triagent_ops.mcp_client import LocalMcpClient, McpClientError, McpToolDefinition
@@ -137,18 +143,30 @@ class FakeChatModel:
         *,
         report_response: str = f"```markdown\n{REPORT_MARKDOWN}\n```",
         report_error: Exception | None = None,
+        planner_response: str = '{"steps": []}',
+        replan_responses: Sequence[str] = (),
     ) -> None:
         self.report_response = report_response
         self.report_error = report_error
+        self.planner_response = planner_response
+        self.replan_responses = list(replan_responses)
         self.inputs: list[object] = []
+        self.replan_inputs: list[object] = []
 
     async def ainvoke(self, input: object) -> object:
-        self.inputs.append(input)
-        if "AIOps 诊断报告生成器" in str(input):
+        text = str(input)
+        if "AIOps 诊断报告生成器" in text:
+            self.inputs.append(input)
             if self.report_error is not None:
                 raise self.report_error
             return self.report_response
-        return '{"steps": []}'
+        if "You are the Replanner" in text:
+            self.replan_inputs.append(input)
+            if self.replan_responses:
+                return self.replan_responses.pop(0)
+            return '{"decision": "stop", "reason": "Recorded evidence is sufficient."}'
+        self.inputs.append(input)
+        return self.planner_response
 
 
 class FakeLlmProvider:
@@ -157,10 +175,14 @@ class FakeLlmProvider:
         *,
         report_response: str = f"```markdown\n{REPORT_MARKDOWN}\n```",
         report_error: Exception | None = None,
+        planner_response: str = '{"steps": []}',
+        replan_responses: Sequence[str] = (),
     ) -> None:
         self.chat_model = FakeChatModel(
             report_response=report_response,
             report_error=report_error,
+            planner_response=planner_response,
+            replan_responses=replan_responses,
         )
 
     def create_chat_model(self) -> FakeChatModel:
@@ -654,3 +676,237 @@ def migrated_database_url(tmp_path: Path) -> str:
     config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{database_path}")
     command.upgrade(config, "head")
     return f"sqlite+aiosqlite:///{database_path}"
+
+
+def test_replan_decision_parses_revise_steps_and_rejects_unknown_tools() -> None:
+    allowed = ["SearchLog"]
+
+    revise = _validated_replan_decision(
+        json.dumps(
+            {
+                "decision": "revise",
+                "reason": "Evidence points to a different log query.",
+                "steps": [
+                    {"id": "step_2", "tool": "SearchLog", "arguments": {"Query": "pool"}},
+                    {"id": "step_3", "tool": "DeleteIndex", "arguments": {}},
+                ],
+            }
+        ),
+        allowed,
+    )
+    missing_steps = _validated_replan_decision(
+        json.dumps({"decision": "revise", "reason": "needs more evidence"}),
+        allowed,
+    )
+    unknown_decision = _validated_replan_decision(
+        json.dumps({"decision": "explode", "reason": "unexpected"}),
+        allowed,
+    )
+
+    assert revise is not None
+    assert revise.continue_execution is True
+    assert [step["tool"] for step in revise.revised_steps] == ["SearchLog"]
+    assert missing_steps is None
+    assert unknown_decision is None
+
+
+def test_replan_decision_bounds_step_count_and_handles_stop() -> None:
+    allowed = ["SearchLog"]
+    many_steps = {
+        "decision": "revise",
+        "reason": "More evidence needed.",
+        "steps": [
+            {"id": f"step_{index}", "tool": "SearchLog", "arguments": {"Query": "cpu"}}
+            for index in range(10)
+        ],
+    }
+
+    revised = _validated_replan_decision(json.dumps(many_steps), allowed)
+    stopped = _validated_replan_decision(
+        json.dumps({"decision": "stop", "reason": "Evidence is sufficient."}),
+        allowed,
+    )
+    deterministic_empty = _deterministic_replan_decision([])
+    deterministic_remaining = _deterministic_replan_decision(
+        [{"id": "step_1", "tool": "SearchLog", "arguments": {}}]
+    )
+
+    assert revised is not None
+    assert len(revised.revised_steps) == MAX_REPLAN_STEPS
+    assert stopped is not None
+    assert stopped.continue_execution is False
+    assert deterministic_empty.continue_execution is False
+    assert deterministic_remaining.continue_execution is True
+
+
+@pytest.mark.asyncio
+async def test_replanner_revises_the_plan_from_recorded_evidence(
+    migrated_database_url: str,
+) -> None:
+    engine = create_memory_engine(migrated_database_url)
+    try:
+        repositories = create_sqlite_memory_repositories(create_memory_session_factory(engine))
+        task = await repositories.diagnostics.create_task(
+            owner_user_id="user-a",
+            task_id="diagnostic-replan",
+            status="accepted",
+            query="Investigate worker CPU alarm",
+            input_payload={"alert": {"severity": "critical"}},
+        )
+        retrieval = KnowledgeRetrievalTool(
+            embedding_model=FakeEmbeddingModel(),
+            vector_store=FakeVectorStore([_sop_hit("user-a")]),
+            rerank_model=FakeRerankModel(),
+        )
+        mcp = FakeMcpClient()
+        provider = FakeLlmProvider(
+            planner_response=json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": "step_1",
+                            "tool": "SearchLog",
+                            "arguments": {"Query": "cpu"},
+                            "purpose": "Collect CPU logs",
+                        }
+                    ]
+                }
+            ),
+            replan_responses=[
+                json.dumps(
+                    {
+                        "decision": "revise",
+                        "reason": "Logs point to pool exhaustion; retrieve the runbook.",
+                        "steps": [
+                            {
+                                "id": "step_2",
+                                "tool": "knowledge_retrieval",
+                                "arguments": {"query": "worker CPU runbook"},
+                                "purpose": "Retrieve the worker runbook",
+                            }
+                        ],
+                    }
+                ),
+                json.dumps({"decision": "stop", "reason": "Evidence answers the alert."}),
+            ],
+        )
+        service = AiopsDiagnosticService(
+            repositories=repositories,
+            llm_provider=cast(LlmProvider, provider),
+            retrieval_tool=retrieval,
+            mcp_client=cast(LocalMcpClient, mcp),
+            cls_region="ap-guangzhou",
+            cls_topic_id="topic-a",
+        )
+
+        async for _ in service.stream(
+            task=task,
+            accessible_knowledge_base_ids=("kb_user-a",),
+        ):
+            pass
+
+        steps = await repositories.diagnostics.list_steps(
+            owner_user_id="user-a",
+            task_id=task.id,
+        )
+        checkpoints = await repositories.diagnostics.list_checkpoints(
+            owner_user_id="user-a",
+            task_id=task.id,
+        )
+    finally:
+        await engine.dispose()
+
+    assert [step.phase for step in steps] == [
+        "planner",
+        "executor",
+        "replanner",
+        "executor",
+        "replanner",
+        "report",
+    ]
+    replanner_payloads = [step.payload for step in steps if step.phase == "replanner"]
+    assert replanner_payloads[0]["decisionSource"] == "model"
+    assert replanner_payloads[0]["decision"] == "executor"
+    assert replanner_payloads[0]["reason"] == "Logs point to pool exhaustion; retrieve the runbook."
+    revised_steps = cast(list[dict[str, object]], replanner_payloads[0]["revisedSteps"])
+    assert [step["tool"] for step in revised_steps] == ["knowledge_retrieval"]
+    assert replanner_payloads[1]["decision"] == "report"
+    executor_payloads = [step.payload for step in steps if step.phase == "executor"]
+    assert [payload["tool"] for payload in executor_payloads] == [
+        "SearchLog",
+        "knowledge_retrieval",
+    ]
+    assert [checkpoint.checkpoint_ns for checkpoint in checkpoints] == [
+        "planner",
+        "executor",
+        "replanner",
+        "executor",
+        "replanner",
+        "report",
+    ]
+    replan_prompt = str(provider.chat_model.replan_inputs[0])
+    assert "Recorded evidence" in replan_prompt
+    assert "cpu_pressure" in replan_prompt
+    assert len(provider.chat_model.replan_inputs) == 2
+
+
+@pytest.mark.asyncio
+async def test_replanner_falls_back_when_the_model_returns_an_unusable_decision(
+    migrated_database_url: str,
+) -> None:
+    engine = create_memory_engine(migrated_database_url)
+    try:
+        repositories = create_sqlite_memory_repositories(create_memory_session_factory(engine))
+        task = await repositories.diagnostics.create_task(
+            owner_user_id="user-a",
+            task_id="diagnostic-replan-fallback",
+            status="accepted",
+            query="Investigate worker CPU alarm",
+            input_payload={"alert": {"severity": "critical"}},
+        )
+        retrieval = KnowledgeRetrievalTool(
+            embedding_model=FakeEmbeddingModel(),
+            vector_store=FakeVectorStore([_sop_hit("user-a")]),
+            rerank_model=FakeRerankModel(),
+        )
+        provider = FakeLlmProvider(
+            planner_response=json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": "step_1",
+                            "tool": "SearchLog",
+                            "arguments": {"Query": "cpu"},
+                            "purpose": "Collect CPU logs",
+                        }
+                    ]
+                }
+            ),
+            replan_responses=[json.dumps({"decision": "revise", "reason": "no steps here"})],
+        )
+        service = AiopsDiagnosticService(
+            repositories=repositories,
+            llm_provider=cast(LlmProvider, provider),
+            retrieval_tool=retrieval,
+            mcp_client=cast(LocalMcpClient, FakeMcpClient()),
+            cls_region="ap-guangzhou",
+            cls_topic_id="topic-a",
+        )
+
+        async for _ in service.stream(
+            task=task,
+            accessible_knowledge_base_ids=("kb_user-a",),
+        ):
+            pass
+
+        steps = await repositories.diagnostics.list_steps(
+            owner_user_id="user-a",
+            task_id=task.id,
+        )
+    finally:
+        await engine.dispose()
+
+    replanner_payloads = [step.payload for step in steps if step.phase == "replanner"]
+    assert replanner_payloads[0]["decisionSource"] == "fallback"
+    assert replanner_payloads[0]["decision"] == "report"
+    assert [step.phase for step in steps] == ["planner", "executor", "replanner", "report"]

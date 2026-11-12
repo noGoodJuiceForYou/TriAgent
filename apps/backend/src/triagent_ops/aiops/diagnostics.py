@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from operator import add
 from time import monotonic
@@ -49,6 +50,8 @@ class AiopsDiagnosticState(TypedDict, total=False):
     plan: list[JsonDict]
     plan_origin: str
     plan_index: int
+    available_tools: list[str]
+    replan_count: int
     continue_execution: bool
     execution_failed: bool
     report_id: str
@@ -65,6 +68,17 @@ AIOPS_REPORT_REQUIRED_HEADINGS = (
     "## 📋 活跃告警清单",
     "## 📊 结论",
 )
+MAX_REPLAN_ROUNDS = 3
+MAX_REPLAN_STEPS = 3
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplanDecision:
+    """One bounded Replanner decision derived from recorded execution evidence."""
+
+    continue_execution: bool
+    reason: str
+    revised_steps: list[JsonDict]
 
 
 class AiopsDiagnosticService:
@@ -367,6 +381,7 @@ class AiopsDiagnosticService:
             "no_sop_matched": no_sop_matched,
             "plan": plan,
             "plan_origin": plan_origin,
+            "available_tools": available_tools,
             "evidence_ids": persisted_evidence_ids,
             "events": events,
         }
@@ -530,44 +545,150 @@ class AiopsDiagnosticService:
 
     async def _replanner(self, state: AiopsDiagnosticState) -> dict[str, object]:
         task_id = str(state["task_id"])
+        owner_user_id = str(state["owner_user_id"])
         plan = cast(list[JsonDict], state.get("plan") or [])
         plan_index = int(state.get("plan_index") or 0)
         execution_failed = bool(state.get("execution_failed"))
-        continue_execution = plan_index < len(plan) and not execution_failed
-        decision = (
-            "continuing with the next bounded step" if continue_execution else "moving to Report"
+        replan_count = int(state.get("replan_count") or 0)
+        remaining = plan[plan_index:]
+
+        decision, decision_source = await self._resolve_replan_decision(
+            state,
+            plan=plan,
+            plan_index=plan_index,
+            remaining=remaining,
+            execution_failed=execution_failed,
+            replan_count=replan_count,
         )
+        continue_execution = decision.continue_execution and (
+            bool(remaining) or bool(decision.revised_steps)
+        )
+        revised_plan = (
+            [*plan[:plan_index], *decision.revised_steps]
+            if decision.revised_steps and continue_execution
+            else plan
+        )
+        applied_replans = replan_count + (1 if revised_plan is not plan else 0)
+
         events = [
             _task_status_event(
                 task_id,
                 "running",
-                f"Replanner: {decision} based on recorded execution evidence.",
+                f"Replanner: {decision.reason}",
                 70 if continue_execution else 80,
             )
         ]
+        replanner_payload: JsonDict = {
+            "planIndex": plan_index,
+            "planLength": len(plan),
+            "revisedPlanLength": len(revised_plan),
+            "executionFailed": execution_failed,
+            "decision": "executor" if continue_execution else "report",
+            "decisionSource": decision_source,
+            "reason": decision.reason,
+            "replanCount": replan_count,
+            "remainingSteps": remaining,
+            "revisedSteps": decision.revised_steps,
+        }
         await self._create_step(
-            owner_user_id=str(state["owner_user_id"]),
+            owner_user_id=owner_user_id,
             task_id=task_id,
             phase="replanner",
             status="completed",
-            payload={
-                "planIndex": plan_index,
-                "planLength": len(plan),
-                "executionFailed": execution_failed,
-                "decision": "executor" if continue_execution else "report",
-            },
+            payload=replanner_payload,
         )
-        await self._save_checkpoint(
+        await self._save_checkpoint(state, "replanner", replanner_payload)
+        return {
+            "plan": revised_plan,
+            "continue_execution": continue_execution,
+            "replan_count": applied_replans,
+            "events": events,
+        }
+
+    async def _resolve_replan_decision(
+        self,
+        state: AiopsDiagnosticState,
+        *,
+        plan: list[JsonDict],
+        plan_index: int,
+        remaining: list[JsonDict],
+        execution_failed: bool,
+        replan_count: int,
+    ) -> tuple[_ReplanDecision, str]:
+        if execution_failed:
+            return (
+                _ReplanDecision(
+                    continue_execution=False,
+                    reason=(
+                        "Executor step failed; converging to an evidence-backed report."
+                    ),
+                    revised_steps=[],
+                ),
+                "fallback",
+            )
+        if replan_count >= MAX_REPLAN_ROUNDS:
+            return (_deterministic_replan_decision(remaining), "fallback")
+
+        model_decision = await self._request_model_replan(
             state,
-            "replanner",
-            {
-                "planIndex": plan_index,
-                "planLength": len(plan),
-                "executionFailed": execution_failed,
-                "decision": "executor" if continue_execution else "report",
-            },
+            plan=plan,
+            plan_index=plan_index,
+            remaining=remaining,
+            replan_count=replan_count,
         )
-        return {"continue_execution": continue_execution, "events": events}
+        if model_decision is None:
+            return (_deterministic_replan_decision(remaining), "fallback")
+        if model_decision.continue_execution and not remaining and not model_decision.revised_steps:
+            return (_deterministic_replan_decision(remaining), "fallback")
+        return (model_decision, "model")
+
+    async def _request_model_replan(
+        self,
+        state: AiopsDiagnosticState,
+        *,
+        plan: list[JsonDict],
+        plan_index: int,
+        remaining: list[JsonDict],
+        replan_count: int,
+    ) -> _ReplanDecision | None:
+        available_tools = [
+            str(tool) for tool in cast(Sequence[object], state.get("available_tools") or [])
+        ]
+        executed_steps = [
+            {
+                "id": step.get("id"),
+                "tool": step.get("tool"),
+                "purpose": step.get("purpose"),
+            }
+            for step in plan[:plan_index]
+        ]
+        recorded_evidence = [
+            {
+                "tool": item.get("tool"),
+                "status": item.get("status"),
+                "summary": str(item.get("summary") or "")[:400],
+            }
+            for item in cast(Sequence[JsonDict], state.get("evidence") or [])
+        ]
+        prompt = (
+            "You are the Replanner of a bounded AIOps investigation. Judge only from recorded "
+            "evidence. Return JSON only with `decision` (`continue`, `revise` or `stop`) and "
+            "`reason`. Use `continue` when the remaining planned steps are still the right next "
+            "move, `revise` when the evidence points to different investigation steps and supply "
+            "a `steps` array, or `stop` when the evidence already answers the alert. Each step "
+            "has `id`, `tool`, `arguments` and `purpose`. Use only these tools: "
+            f"{json.dumps(list(available_tools))}. User query: {state.get('query') or ''}. "
+            f"Alert: {json.dumps(_json_dict(state.get('alert')))}. "
+            f"Executed steps: {json.dumps(executed_steps)}. "
+            f"Recorded evidence: {json.dumps(recorded_evidence)}. "
+            f"Remaining planned steps: {json.dumps(list(remaining))}. "
+            f"Replan rounds already used: {replan_count} of {MAX_REPLAN_ROUNDS}."
+        )
+        try:
+            response = await self._llm_provider.create_chat_model().ainvoke(prompt)
+        except Exception:
+            return None
+        return _validated_replan_decision(_model_text(response), available_tools)
 
     async def _report(self, state: AiopsDiagnosticState) -> dict[str, object]:
         task_id = str(state["task_id"])
@@ -836,12 +957,64 @@ def _validated_plan(text: str, available_tools: Sequence[str]) -> list[JsonDict]
         return []
     if not isinstance(parsed, Mapping):
         return []
-    raw_steps = parsed.get("steps")
+    return _validated_steps(parsed.get("steps"), available_tools)
+
+
+def _validated_replan_decision(
+    text: str, available_tools: Sequence[str]
+) -> _ReplanDecision | None:
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match is None:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, Mapping):
+        return None
+    raw_decision = parsed.get("decision")
+    if not isinstance(raw_decision, str):
+        return None
+    reason = str(parsed.get("reason") or "").strip()[:300] or "Model replan decision."
+    decision = raw_decision.strip().lower()
+    if decision == "stop":
+        return _ReplanDecision(continue_execution=False, reason=reason, revised_steps=[])
+    if decision == "continue":
+        return _ReplanDecision(continue_execution=True, reason=reason, revised_steps=[])
+    if decision == "revise":
+        revised_steps = _validated_steps(parsed.get("steps"), available_tools)
+        if not revised_steps:
+            return None
+        return _ReplanDecision(
+            continue_execution=True,
+            reason=reason,
+            revised_steps=revised_steps,
+        )
+    return None
+
+
+def _deterministic_replan_decision(remaining: Sequence[JsonDict]) -> _ReplanDecision:
+    if remaining:
+        return _ReplanDecision(
+            continue_execution=True,
+            reason="Continuing with the next bounded planned step.",
+            revised_steps=[],
+        )
+    return _ReplanDecision(
+        continue_execution=False,
+        reason="All planned steps are complete; compiling the evidence-backed report.",
+        revised_steps=[],
+    )
+
+
+def _validated_steps(raw_steps: object, available_tools: Sequence[str]) -> list[JsonDict]:
     if not isinstance(raw_steps, list):
         return []
     allowed_tools = set(available_tools) | {"knowledge_retrieval"}
     steps: list[JsonDict] = []
-    for index, raw_step in enumerate(raw_steps):
+    for index, raw_step in enumerate(cast(list[object], raw_steps)):
+        if len(steps) >= MAX_REPLAN_STEPS:
+            break
         if not isinstance(raw_step, Mapping):
             continue
         tool_name = raw_step.get("tool")

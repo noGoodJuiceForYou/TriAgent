@@ -36,7 +36,7 @@ TriAgent Ops 是一个本地优先的 AIOps 工作台。Vue 3 提供操作界面
 
 ### AIOps 智能诊断
 
-- **Plan-Execute-Replan**：使用 LangGraph 实现 `Planner -> Executor -> Replanner -> Report`，Planner 先检索 SOP，Executor 调用真实工具，Replanner 决定继续、调整或生成报告。
+- **Plan-Execute-Replan**：使用 LangGraph 实现 `Planner -> Executor -> Replanner -> Report`，Planner 先检索 SOP，Executor 调用真实工具，Replanner 依据已落库证据决定继续、重规划剩余步骤或直接出报告，并受重规划轮数与单轮步骤数上限约束，模型输出不可用时回落到确定性推进。
 - **真实告警入口**：聚合 Prometheus v1 和 Alertmanager v2 活跃告警，用户可刷新告警并从某条告警直接创建诊断任务。
 - **持久后台执行**：诊断由 SQLite durable job runtime 调度，不阻塞 API；页面展示排队、执行、取消、失败和完成状态，并支持用户取消任务。
 - **诊断 SSE**：实时输出计划、步骤、工具调用、证据、重规划、报告、完成和错误事件；断开后可根据持久化事件和任务数据恢复。
