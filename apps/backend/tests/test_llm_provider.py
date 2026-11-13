@@ -56,7 +56,7 @@ def test_loads_tracked_qwen_defaults() -> None:
     assert config.provider == "qwen-openai"
     assert config.api_key.startswith("sk-")
     assert config.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    assert config.chat_model == "qwen3.7-max"
+    assert config.chat_model == "qwen3.7-flash"
     assert config.embedding_model == "text-embedding-v4"
     assert config.embedding_dimensions == 1024
     assert config.rerank_model == "qwen3-vl-rerank"
@@ -215,7 +215,7 @@ async def test_readiness_succeeds_without_exposing_secret() -> None:
 
     assert result.ok is True
     assert result.provider == "qwen-openai"
-    assert result.model == "qwen3.7-max"
+    assert result.model == "qwen3.7-flash"
     assert result.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert result.error is None
     assert result.latency_ms >= 0

@@ -41,6 +41,9 @@ uv run uvicorn triagent_ops.api:create_app --factory --reload
 - `maxRetries`: `2`
 - `apiKey`: 私有仓库开发密钥
 
+以上字段都可以在被 Git 忽略的 `config/user.project.json` 的 `llm` 段中覆盖；
+聊天模型覆盖时必须在 `modelCapabilities` 中同时声明该模型的上下文窗口。
+
 后端不会读取本地环境变量中的提供者设置。
 
 就绪检查返回提供者、模型、端点、延迟和安全错误字符串

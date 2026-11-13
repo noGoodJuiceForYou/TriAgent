@@ -104,7 +104,7 @@ cp config/user.project.template.json config/user.project.json
 ```
 
 - `config/project.json`：基础运行配置，仅保存在本机。
-- `config/user.project.json`：个人模型与 CLS 配置，仅保存在本机并覆盖基础配置。
+- `config/user.project.json`：个人模型（聊天/向量/重排）、CLS 凭据与日志目标、CLS MCP SSE 地址、告警源凭据和演示账号密码，仅保存在本机并覆盖基础配置。
 - `config/project.template.json`、`config/user.project.template.json`：可安全提交的配置模板。
 
 两个本地配置文件均被 Git 忽略。请阅读[配置与运维教程](docs/operations-and-monitoring.md)填写模型密钥、CLS 凭据与其他本机配置，禁止将真实凭据加入版本控制。
