@@ -22,7 +22,13 @@ describe("runtime health", () => {
   it("renders a degraded header state after lightweight health fails", async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
-    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/", component: { template: "<div />" } }] });
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/", component: { template: "<div />" } },
+        { path: "/settings", component: { template: "<div />" } }
+      ]
+    });
     await router.push("/");
     await router.isReady();
     const wrapper = mount(WorkspaceLayout, {
