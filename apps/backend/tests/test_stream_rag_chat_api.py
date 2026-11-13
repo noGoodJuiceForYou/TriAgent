@@ -205,6 +205,58 @@ def test_tool_and_reference_events_are_never_deduplicated() -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_chat_deduplicates_repeated_chunk_citations(
+    migrated_database_url: str,
+) -> None:
+    """Several retrieval calls in one answer can return the same chunk."""
+
+    def reference(chunk_id: str, title: str) -> ChatAgentReference:
+        return ChatAgentReference(
+            id=chunk_id,
+            title=title,
+            source_type="knowledge-base",
+            chunk_id=chunk_id,
+            document_id="doc_1",
+            knowledge_base_id="kb_user",
+            source="runbook.md",
+            score=0.9,
+            knowledge_type="sop",
+        )
+
+    runner = FakeChatAgentRunner(
+        events=[
+            reference("chunk_1", "runbook.md"),
+            reference("chunk_2", "runbook.md"),
+            reference("chunk_1", "runbook.md"),
+            ChatAgentContentDelta("Answer."),
+        ]
+    )
+    app = create_app(database_url=migrated_database_url, chat_agent_runner=runner)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        user = await _register(client, "dedupe-owner@example.com", "Dedupe Owner")
+        headers = _auth_headers(user["accessToken"])
+        session = (await client.post("/chat/sessions", headers=headers, json={})).json()["data"]
+
+        stream_response = await client.post(
+            f"/chat/sessions/{session['id']}/messages:stream",
+            headers=headers,
+            json={"content": "Which chunk applies?"},
+        )
+        detail_response = await client.get(f"/chat/sessions/{session['id']}", headers=headers)
+
+    events = _parse_sse(stream_response.text)
+    reference_events = [event for event in events if event["event"] == "reference.source"]
+    assert [event["data"]["reference"]["id"] for event in reference_events] == [
+        "chunk_1",
+        "chunk_2",
+    ]
+
+    citations = detail_response.json()["data"]["messages"][1]["metadata"]["citations"]
+    assert [citation["id"] for citation in citations] == ["chunk_1", "chunk_2"]
+
+
+@pytest.mark.asyncio
 async def test_streaming_chat_emits_sse_events_and_persists_messages(
     migrated_database_url: str,
     caplog: pytest.LogCaptureFixture,
