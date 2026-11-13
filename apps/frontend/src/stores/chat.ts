@@ -12,6 +12,7 @@ import type {
 
 import { ApiClientError } from "../api/apiClient";
 import { createChatClient, type ChatClient } from "../chat/chatClient";
+import { dedupeReferences } from "../chat/citationPanels";
 import { useFeedbackStore } from "./feedback";
 import { toUserFacingError } from "../ui/userFacingError";
 
@@ -60,7 +61,7 @@ export const useChatStore = defineStore("chat", () => {
     const latestAssistant = [...nextMessages]
       .reverse()
       .find((item) => item.role === "assistant");
-    references.value = uniqueReferences(latestAssistant?.metadata.citations ?? []);
+    references.value = dedupeReferences(latestAssistant?.metadata.citations ?? []);
   }
 
   async function loadSession(sessionId: string): Promise<void> {
@@ -261,6 +262,15 @@ export const useChatStore = defineStore("chat", () => {
       }
     },
     reset,
+    loadConfiguration: async (): Promise<void> => {
+      try {
+        if (client.getConfiguration === undefined) return;
+        configuration.value = await client.getConfiguration();
+      } catch (error) {
+        reportError(error);
+        throw error;
+      }
+    },
     updateMemoryMode: async (mode: ChatMemoryMode): Promise<void> => {
       const sessionId = activeSessionId.value;
       if (sessionId === null || isUpdatingMemory.value) return;
@@ -321,7 +331,7 @@ export const useChatStore = defineStore("chat", () => {
             updateAssistantReasoning(targetSessionId, draftId, event.delta, messages);
           }
           if (event.type === "reference.source") {
-            references.value = uniqueReferences([...references.value, event.reference]);
+            references.value = dedupeReferences([...references.value, event.reference]);
           }
           if (event.type === "tool.call") {
             updateLiveToolCall(event.toolCall, liveToolCalls);
@@ -432,24 +442,6 @@ function updateLiveToolCall(
     ...(next.output === undefined ? {} : { output: next.output })
   };
   target.value = [merged, ...target.value.filter((item) => item.id !== next.id)];
-}
-
-function uniqueReferences(items: readonly ChatReference[]): readonly ChatReference[] {
-  const seen = new Set<string>();
-  return items
-    .filter((item) => {
-      if (seen.has(item.id)) {
-        return false;
-      }
-      seen.add(item.id);
-      return true;
-    })
-    .sort((left, right) => referenceScore(right) - referenceScore(left))
-    .slice(0, 5);
-}
-
-function referenceScore(reference: ChatReference): number {
-  return reference.rerankScore ?? reference.score ?? Number.NEGATIVE_INFINITY;
 }
 
 function waitForTypewriterTick(): Promise<void> {

@@ -11,6 +11,7 @@ import AiopsView from "../views/AiopsView.vue";
 import ChatView from "../views/ChatView.vue";
 import KnowledgeView from "../views/KnowledgeView.vue";
 import McpView from "../views/McpView.vue";
+import SettingsView from "../views/SettingsView.vue";
 import WorkspacePlaceholderView from "../views/WorkspacePlaceholderView.vue";
 
 export interface AuthRouteAccess {
@@ -65,6 +66,12 @@ export function createAppRouter(auth: AuthRouteAccess): Router {
             name: "mcp",
             component: McpView,
             meta: { title: "MCP 连接" }
+          },
+          {
+            path: "settings",
+            name: "settings",
+            component: SettingsView,
+            meta: { title: "系统设置" }
           }
         ]
       },
