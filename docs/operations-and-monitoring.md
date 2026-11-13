@@ -11,16 +11,22 @@ cp config/user.project.template.json config/user.project.json
 
 ## 项目交付后的个人配置
 
-在本地 `config/user.project.json` 中填写使用者自己的模型密钥、CLS 凭据和 CLS 日志目标。其他运行参数可在本地 `config/project.json` 中调整：
+在本地 `config/user.project.json` 中填写使用者自己的模型、凭据、日志目标与告警源；加载器按字段深合并，只有出现在该文件里的字段才会覆盖基础配置：
 
 | 配置字段 | 替换为 |
 | --- | --- |
 | `llm.apiKey` | 使用者自己的模型服务密钥 |
+| `llm.chatModel` + `llm.modelCapabilities.<模型>.contextWindowTokens` | 使用者可用的聊天模型及其上下文窗口 |
+| `llm.embeddingModel` + `llm.embeddingDimensions` | 使用者自己的向量模型与维度（维度必须与 Milvus 集合一致） |
+| `llm.rerankModel` + `llm.rerankUrl` | 使用者自己的重排模型与调用端点 |
 | `clsMcpServer.secretId` | 使用者自己的 CLS 凭据 ID |
 | `clsMcpServer.secretKey` | 使用者自己的 CLS 凭据密钥 |
+| `mcp.clsSseUrl` | CLS MCP Server 的 SSE 地址（本机或远端） |
+| `prometheusAlerts.sources` | 使用者自己的告警源地址与 basic auth 凭据；数组按整体替换，需要连同保留的告警源一起写全 |
 | `clsLogUpload.region` | 使用者自己的 CLS 地域 |
 | `clsLogUpload.logsetId` | 使用者自己的 CLS 日志集 ID |
 | `clsLogUpload.topicId` | 使用者自己的 CLS 主题 ID |
+| `aiopsDemo.password` | 演示账号密码（`email`/`displayName` 默认沿用基础配置） |
 
 模板中的凭据字段必须保持为空。即使仓库是私有仓库，也不要提交真实密钥；已暴露的密钥应在对应云平台立即轮换。
 

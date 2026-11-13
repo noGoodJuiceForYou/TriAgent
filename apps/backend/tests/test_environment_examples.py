@@ -47,13 +47,13 @@ def test_project_config_contains_development_provider_config() -> None:
     assert user_config["llm"]["apiKey"].startswith("sk-")
     assert llm["apiKey"].startswith("sk-")
     assert llm["baseUrl"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    assert llm["chatModel"] == "qwen3.7-max"
+    assert llm["chatModel"] == "qwen3.7-flash"
     assert llm["embeddingModel"] == "text-embedding-v4"
     assert llm["embeddingDimensions"] == 1024
     assert llm["rerankModel"] == "qwen3-vl-rerank"
     assert "modelCapabilities" not in base_config["llm"]
     capabilities = user_config["llm"]["modelCapabilities"]
-    assert capabilities["qwen3.7-max"]["contextWindowTokens"] == 1_000_000
+    assert capabilities["qwen3.7-flash"]["contextWindowTokens"] == 1_000_000
     assert llm["maxRetries"] == 2
 
 
@@ -66,3 +66,35 @@ def test_project_config_declares_real_prometheus_and_alertmanager_sources() -> N
     assert sources[0]["alertsApi"].endswith("/api/v1/alerts")
     assert sources[1]["type"] == "alertmanager-v2"
     assert sources[1]["alertsApi"] == "http://127.0.0.1:9093/api/v2/alerts"
+
+
+def test_user_project_template_declares_personal_overrides() -> None:
+    base_template = json.loads(
+        (REPO_ROOT / "config/project.template.json").read_text(encoding="utf-8")
+    )
+    user_template = json.loads(
+        (REPO_ROOT / "config/user.project.template.json").read_text(encoding="utf-8")
+    )
+    llm = user_template["llm"]
+
+    assert llm["apiKey"] == ""
+    assert llm["chatModel"] == "qwen3.7-max"
+    assert llm["embeddingDimensions"] == 1024
+    assert llm["rerankModel"] == base_template["llm"]["rerankModel"]
+    assert llm["rerankUrl"] == base_template["llm"]["rerankUrl"]
+    assert llm["modelCapabilities"]["qwen3.7-max"]["contextWindowTokens"] == 1_000_000
+
+    assert user_template["mcp"]["clsSseUrl"] == base_template["mcp"]["clsSseUrl"]
+    assert user_template["clsMcpServer"]["secretId"] == ""
+    assert user_template["clsMcpServer"]["secretKey"] == ""
+
+    sources = user_template["prometheusAlerts"]["sources"]
+    assert sources[0]["alertsApi"] == ""
+    assert sources[0]["username"] == ""
+    assert sources[0]["password"] == ""
+    assert sources[1] == base_template["prometheusAlerts"]["sources"][1]
+
+    assert user_template["clsLogUpload"]["region"] == "ap-guangzhou"
+    assert user_template["clsLogUpload"]["logsetId"] == ""
+    assert user_template["clsLogUpload"]["topicId"] == ""
+    assert user_template["aiopsDemo"]["password"] == ""
