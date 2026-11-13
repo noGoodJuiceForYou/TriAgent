@@ -216,6 +216,7 @@ class ChatStreamingService:
         answer_parts: list[str] = []
         tool_call_ids: list[str] = []
         citations: list[dict[str, object]] = []
+        cited_ids: set[str] = set()
         reasoning_parts: list[str] = []
         sequence = 0
 
@@ -261,6 +262,11 @@ class ChatStreamingService:
                     yield _sse_event("tool.call", {"toolCall": payload})
                 else:
                     reference = _reference_payload(event)
+                    reference_id = str(reference.get("id") or "")
+                    if reference_id:
+                        if reference_id in cited_ids:
+                            continue
+                        cited_ids.add(reference_id)
                     citations.append(reference)
                     yield _sse_event("reference.source", {"reference": reference})
 

@@ -23,10 +23,16 @@ describe("chat workspace layout", () => {
     );
   });
 
-  it("uses a conversation-first desktop grid without a second history surface", () => {
+  it("hides the citation column until an answer requests it", () => {
     expect(chatViewSource).toMatch(
-      /\.chat-view\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(18rem, 22rem\);/s
+      /\.chat-view\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/s
     );
+    expect(chatViewSource).toMatch(
+      /\.chat-view--with-citations\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(18rem, 22rem\);/s
+    );
+    expect(chatViewSource).toContain('v-if="isCitationPanelOpen && selectedCitation"');
+    expect(chatViewSource).toContain("citationBySession");
+    expect(chatViewSource).toContain("toggleCitationPanel");
     expect(chatViewSource).not.toContain("ChatSessionList");
     expect(chatViewSource).not.toContain("chat-view__mobile-history");
     expect(chatViewSource).not.toContain('aria-label="查看历史对话"');
@@ -39,6 +45,19 @@ describe("chat workspace layout", () => {
     expect(transcriptSource).not.toMatch(/\.chat-transcript__message--user \.chat-transcript__message\s*\{/);
     expect(transcriptSource).not.toContain("background: #efefef");
     expect(transcriptSource).toMatch(/\.chat-transcript__message p\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+  });
+
+  it("lets the answer text fill the conversation column", () => {
+    expect(transcriptSource).toMatch(
+      /\.chat-transcript__message\s*\{[^}]*max-width:\s*100%;/s
+    );
+    expect(transcriptSource).not.toMatch(
+      /\.chat-transcript__message\s*\{[^}]*max-width:\s*min\(46rem/s
+    );
+    expect(transcriptSource).toMatch(
+      /\.chat-transcript__context\s*\{[^}]*max-width:\s*100%;/s
+    );
+    expect(transcriptSource).not.toMatch(/padding:\s*1\.75rem clamp\(1rem, 4vw, 4\.5rem\)/);
   });
 
   it("removes focus rectangles from the chat workspace and composer", () => {

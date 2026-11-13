@@ -10,6 +10,12 @@ title: OpenSpec 变更
 
 ## 已归档
 
+- [per-conversation-citation-panel](/changes/archive/2026-11-13-per-conversation-citation-panel/)
+- [fix-wiki-openspec-symlink](/changes/archive/2026-11-13-fix-wiki-openspec-symlink/)
+- [dedupe-answer-citations](/changes/archive/2026-11-13-dedupe-answer-citations/)
+- [split-settings-and-citation-panel](/changes/archive/2026-11-12-split-settings-and-citation-panel/)
+- [model-driven-replanner](/changes/archive/2026-11-12-model-driven-replanner/)
+- [collapse-citation-panel](/changes/archive/2026-11-12-collapse-citation-panel/)
 - [use-positive-idf-bm25](/changes/archive/2026-07-11-use-positive-idf-bm25/)
 - [show-retrieval-stage-ranks](/changes/archive/2026-07-11-show-retrieval-stage-ranks/)
 - [remove-project-config-from-git-history](/changes/archive/2026-07-11-remove-project-config-from-git-history/)

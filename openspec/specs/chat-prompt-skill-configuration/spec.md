@@ -2,7 +2,9 @@
 
 ## Purpose
 定义聊天系统提示词与技能装配配置，使每个 user 可以在受控目录内选择提示预设和技能，并让聊天流持久化真实的工具调用与 reasoning 上下文。
+
 ## Requirements
+
 ### Requirement: User chat assembly configuration
 系统 SHALL 提供一个 user 范围的聊天组件配置，包含一个有效的用户系统提示词和零个或多个由当前 user 上传的有效 Skill 标识符。系统 SHALL 对 Skill 上传执行 Agent Skills 标准的文件名、大小、编码、YAML frontmatter、`name` 和 `description` 校验。
 
@@ -85,3 +87,28 @@
 #### Scenario: Prompt configuration loads for the first time
 - **WHEN** 系统提示词配置首次从 null 变为可用
 - **THEN** 前端 MAY 展开当前使用的提示词一次，之后的配置刷新 MUST 保持 user 的展开选择
+
+### Requirement: Assembly configuration surface location
+
+用户对话装配配置 SHALL 在独立的系统设置工作区中编辑，而不是占用对话工作区的固定栏位。
+
+#### Scenario: Prompt configuration lives on the settings route
+
+- **WHEN** 已认证用户打开 `/settings`
+- **THEN** 系统提示词面板 MUST 在该路由中可编辑、创建、删除与选用
+
+#### Scenario: Skill configuration lives on the settings route
+
+- **WHEN** 已认证用户打开 `/settings`
+- **THEN** Skill 面板 MUST 在该路由中可上传、删除与保存选用
+
+#### Scenario: Conversation keeps the full width
+
+- **WHEN** 已认证用户打开 `/chat`
+- **THEN** 对话工作区 MUST NOT 渲染系统提示词或 Skill 配置面板
+- **AND** 其右侧栏 MUST 仅用于展示当前回答的引用
+
+#### Scenario: Direct visit loads the saved configuration
+
+- **WHEN** 用户直接访问 `/settings` 且本地尚未加载装配配置
+- **THEN** 前端 MUST 通过现有的 owner 范围配置接口读取已保存的提示词、Skill 与当前选用状态

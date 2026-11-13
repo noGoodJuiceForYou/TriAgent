@@ -85,7 +85,7 @@ function handleKeydown(event: KeyboardEvent): void {
 </template>
 
 <style scoped>
-.chat-composer { background: linear-gradient(to top, var(--surface-raised) 68%, rgb(255 255 255 / 0%)); display: grid; gap: 0.45rem; padding: 1.5rem clamp(1rem, 4vw, 4.5rem) 1.25rem; }
+.chat-composer { background: linear-gradient(to top, var(--surface-raised) 68%, rgb(255 255 255 / 0%)); display: grid; gap: 0.45rem; padding: 1.5rem clamp(1rem, 2.5vw, 2rem) 1.25rem; }
 .chat-composer__label { color: var(--text-tertiary); font-size: 0.72rem; font-weight: 650; }
 .chat-composer__row { align-items: stretch; display: grid; gap: 0.75rem; grid-template-columns: minmax(0, 1fr) 17rem; }
 .chat-composer__field { background: var(--surface-raised); border: 1px solid var(--line-strong); border-radius: 1.25rem; box-shadow: 0 6px 20px rgb(0 0 0 / 6%); display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 0.35rem; transition: border-color var(--transition-fast), box-shadow var(--transition-fast); }

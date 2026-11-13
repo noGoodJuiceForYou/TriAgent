@@ -96,7 +96,7 @@ describe("chat components", () => {
         isLoading: false,
         liveToolCalls: [],
         messages: [],
-        references: [],
+        openReferencesMessageId: null,
         toolAudits: []
       }
     });
@@ -165,32 +165,61 @@ describe("chat components", () => {
     expect(wrapper.emitted("delete")).toEqual([["chat_1"]]);
   });
 
-  it("renders Markdown, source titles, detailed citation evidence, and tool result summaries", async () => {
+  it("renders Markdown, source chips, and tool result summaries", async () => {
     const wrapper = mount(ChatTranscript, {
       props: {
         isLoading: false,
         liveToolCalls: [],
         messages: [assistantMessage],
-        references: assistantMessage.metadata.citations ?? [],
+        openReferencesMessageId: null,
         toolAudits: audits
       }
     });
 
     expect(wrapper.text()).toContain("runbook");
-    expect(wrapper.text()).toContain("Restart runbook");
     expect(wrapper.text()).toContain("Found 1 relevant chunk.");
     expect(wrapper.text()).toContain("工具调用");
     expect(wrapper.text()).toContain("深度思考");
     expect(wrapper.text()).toContain("先确认运行手册，再给出结论。");
-    expect(wrapper.text()).toContain("向量#2 · 87%");
-    expect(wrapper.text()).toContain("BM25#1 · 4.210");
-    expect(wrapper.text()).toContain("精排#1 · 94%");
-    const citation = wrapper.get('button[aria-label="查看 Restart runbook 的来源详情"]');
-    await citation.trigger("click");
-    expect(wrapper.text()).toContain("Restart the API after validating the deployment health.");
-    expect(wrapper.text()).toContain("SOP");
-    await wrapper.get('button[aria-label="在知识库中打开 Restart runbook"]').trigger("click");
-    expect(wrapper.emitted("open-document")?.[0]?.[0]).toMatchObject({ documentId: "doc_1" });
+    expect(wrapper.text()).not.toContain("向量#2 · 87%");
+    expect(wrapper.text()).not.toContain("Restart the API after validating the deployment health.");
+
+    const references = wrapper.get('button[aria-label="查看本次回答的 1 条引用来源"]');
+    expect(references.text()).toContain("引用来源（1）");
+    expect(references.attributes("aria-expanded")).toBe("false");
+    await references.trigger("click");
+    expect(wrapper.emitted("toggle-references")?.[0]?.[0]).toBe("message_1");
+    expect(wrapper.emitted("toggle-references")?.[0]?.[1]).toHaveLength(1);
+  });
+
+  it("marks the reference button as expanded when its panel is open", () => {
+    const wrapper = mount(ChatTranscript, {
+      props: {
+        isLoading: false,
+        liveToolCalls: [],
+        messages: [assistantMessage],
+        openReferencesMessageId: "message_1",
+        toolAudits: audits
+      }
+    });
+
+    expect(
+      wrapper.get('button[aria-label="收起本次回答的 1 条引用来源"]').attributes("aria-expanded")
+    ).toBe("true");
+  });
+
+  it("omits the reference button for answers without citations", () => {
+    const wrapper = mount(ChatTranscript, {
+      props: {
+        isLoading: false,
+        liveToolCalls: [],
+        messages: [{ ...assistantMessage, metadata: {} }],
+        openReferencesMessageId: null,
+        toolAudits: []
+      }
+    });
+
+    expect(wrapper.find('button[aria-label^="查看本次回答"]').exists()).toBe(false);
   });
 
   it("shows an explicit un-recalled state for a missing coarse retrieval stage", () => {
