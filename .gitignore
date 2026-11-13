@@ -19,3 +19,6 @@ coverage/
 *.tsbuildinfo
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+
+# 本机写作素材，不属于项目文档
+/openspec从0到1项目实战的提示词.md
